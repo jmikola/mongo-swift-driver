@@ -83,7 +83,7 @@ public struct AggregateOptions: Encodable {
         self.readConcern = readConcern
     }
 
-    // Encode everything except readConcern
+    // Encode everything except readConcern and hint
     private enum CodingKeys: String, CodingKey {
         case allowDiskUse, batchSize, bypassDocumentValidation,
             collation, maxTimeMS, comment
@@ -121,7 +121,7 @@ public struct CountOptions: Encodable {
         self.skip = skip
     }
 
-    // Encode everything except readConcern
+    // Encode everything except readConcern and hint
     private enum CodingKeys: String, CodingKey {
         case collation, limit, maxTimeMS, skip
     }
@@ -291,7 +291,7 @@ public struct FindOptions: Encodable {
         self.sort = sort
     }
 
-    // Encode everything except readConcern
+    // Encode everything except readConcern and hint
     private enum CodingKeys: String, CodingKey {
         case allowPartialResults, batchSize, collation, comment, limit, max, maxAwaitTimeMS,
             maxScan, maxTimeMS, min, noCursorTimeout, projection, returnKey, showRecordId, skip, sort
