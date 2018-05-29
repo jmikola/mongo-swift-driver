@@ -1,5 +1,47 @@
 import libmongoc
 
+/// A struct representing an index hint, defined either by the index name as a `String` or the index key pattern
+/// as a `Document`. If specified, then the query system will only consider plans using the hinted index.
+public struct IndexHint: Encodable {
+    let stringValue: String?
+    let docValue: Document?
+
+    /// Initializes a new `IndexHint` from a `String`.
+    public init(_ str: String) {
+        self.stringValue = str
+        self.docValue = nil
+    }
+
+    /// Initializes a new `IndexHint` from a `Document`.
+    public init(_ doc: Document) {
+        self.stringValue = nil
+        self.docValue = doc
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hint
+    }
+
+    // internal func encode(to doc: Document?) -> Document {
+    //     toReturn = doc ?? Document()
+    //     if self.stringValue != nil {
+    //         toReturn["hint"] = self.stringValue
+    //     } else {
+    //         toReturn["hint"] = self.docValue
+    //     }
+    //     return toReturn
+    // }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let str = self.stringValue {
+            try container.encode(str, forKey: .hint)
+        } else {
+            try container.encode(docValue, forKey: .hint)
+        }
+    }
+}
+
 /// Options to use when executing an `aggregate` command on a `MongoCollection`.
 public struct AggregateOptions: Encodable {
     /// Enables writing to temporary files. When set to true, aggregation stages
@@ -23,21 +65,22 @@ public struct AggregateOptions: Encodable {
     /// the database profiler, currentOp and logs. The default is to not send a value.
     public let comment: String?
 
-    /// The index to use for the aggregation. The hint does not apply to $lookup and $graphLookup stages.
-    // let hint: Optional<(String | Document)>
+    /// The index hint to use for the aggregation. The hint does not apply to $lookup and $graphLookup stages.
+    let hint: IndexHint?
 
     /// A `ReadConcern` to use for this operation. 
     let readConcern: ReadConcern?
 
     /// Convenience initializer allowing any/all parameters to be optional
     public init(allowDiskUse: Bool? = nil, batchSize: Int32? = nil, bypassDocumentValidation: Bool? = nil,
-                collation: Document? = nil, comment: String? = nil, maxTimeMS: Int64? = nil,
+                collation: Document? = nil, comment: String? = nil, hint: IndexHint? = nil, maxTimeMS: Int64? = nil,
                 readConcern: ReadConcern? = nil) {
         self.allowDiskUse = allowDiskUse
         self.batchSize = batchSize
         self.bypassDocumentValidation = bypassDocumentValidation
         self.collation = collation
         self.comment = comment
+        self.hint = hint
         self.maxTimeMS = maxTimeMS
         self.readConcern = readConcern
     }
@@ -54,8 +97,8 @@ public struct CountOptions: Encodable {
     /// Specifies a collation.
     public let collation: Document?
 
-    /// The index to use.
-    // let hint: Optional<(String | Document)>
+    /// A hint for the index to use.
+    let hint: IndexHint?
 
     /// The maximum number of documents to count.
     public let limit: Int64?
@@ -70,9 +113,10 @@ public struct CountOptions: Encodable {
     let readConcern: ReadConcern?
 
     /// Convenience initializer allowing any/all parameters to be optional
-    public init(collation: Document? = nil, limit: Int64? = nil, maxTimeMS: Int64? = nil,
+    public init(collation: Document? = nil, hint: IndexHint? = nil, limit: Int64? = nil, maxTimeMS: Int64? = nil,
                 readConcern: ReadConcern? = nil, skip: Int64? = nil) {
         self.collation = collation
+        self.hint = hint
         self.limit = limit
         self.maxTimeMS = maxTimeMS
         self.readConcern = readConcern
@@ -110,7 +154,7 @@ public struct DistinctOptions: Encodable {
 }
 
 /// The possible types of `MongoCursor` an operation can return.
-public enum CursorType {
+public enum CursorType: Encodable {
     /**
      * The default value. A vast majority of cursors will be of this type.
      */
@@ -139,6 +183,16 @@ public enum CursorType {
      */
     case tailableAwait
 
+    private enum CodingKeys: String, CodingKey {
+        case tailable, awaitData
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self == .tailable || self == .tailableAwait, forKey: .tailable)
+        try container.encode(self == .tailableAwait, forKey: .awaitData)
+    }
+
 }
 
 /// Options to use when executing a `find` command on a `MongoCollection`.
@@ -156,11 +210,10 @@ public struct FindOptions: Encodable {
     public let comment: String?
 
     /// Indicates the type of cursor to use. This value includes both the tailable and awaitData options.
-    // commenting this out until we decide how to encode cursorType.
-    // let cursorType: CursorType?
+    public let cursorType: CursorType?
 
-    /// The index to use.
-    // let hint: Optional<(String | Document)>
+    /// A hint for the index to use.
+    let hint: IndexHint?
 
     /// The maximum number of documents to return.
     public let limit: Int64?
@@ -169,8 +222,7 @@ public struct FindOptions: Encodable {
     public let max: Document?
 
     /// The maximum amount of time for the server to wait on new documents to satisfy a tailable cursor
-    /// query. This only applies to a TAILABLE_AWAIT cursor. When the cursor is not a TAILABLE_AWAIT cursor,
-    /// this option is ignored.
+    /// query. This only applies when used with `CursorType.tailableAwait`. Otherwise, this option is ignored.
     public let maxAwaitTimeMS: Int64?
 
     /// Maximum number of documents or index keys to scan when executing the query.
@@ -207,14 +259,17 @@ public struct FindOptions: Encodable {
 
     /// Convenience initializer allowing any/all parameters to be optional
     public init(allowPartialResults: Bool? = nil, batchSize: Int32? = nil, collation: Document? = nil,
-                comment: String? = nil, limit: Int64? = nil, max: Document? = nil, maxAwaitTimeMS: Int64? = nil,
-                maxScan: Int64? = nil, maxTimeMS: Int64? = nil, min: Document? = nil, noCursorTimeout: Bool? = nil,
-                projection: Document? = nil, readConcern: ReadConcern? = nil, returnKey: Bool? = nil,
-                showRecordId: Bool? = nil, skip: Int64? = nil, sort: Document? = nil) {
+                comment: String? = nil, cursorType: CursorType? = nil, hint: IndexHint? = nil, limit: Int64? = nil,
+                max: Document? = nil, maxAwaitTimeMS: Int64? = nil, maxScan: Int64? = nil, maxTimeMS: Int64? = nil,
+                min: Document? = nil, noCursorTimeout: Bool? = nil, projection: Document? = nil,
+                readConcern: ReadConcern? = nil, returnKey: Bool? = nil, showRecordId: Bool? = nil, skip: Int64? = nil,
+                sort: Document? = nil) {
         self.allowPartialResults = allowPartialResults
         self.batchSize = batchSize
         self.collation = collation
         self.comment = comment
+        self.cursorType = cursorType
+        self.hint = hint
         self.limit = limit
         self.max = max
         self.maxAwaitTimeMS = maxAwaitTimeMS
@@ -583,7 +638,24 @@ public class MongoCollection<T: Codable> {
      */
     public func find(_ filter: Document = [:], options: FindOptions? = nil) throws -> MongoCursor<CollectionType> {
         let encoder = BsonEncoder()
-        let opts = try ReadConcern.append(options?.readConcern, to: try encoder.encode(options), callerRC: self.readConcern)
+        var optionsDoc: Document?
+
+        optionsDoc = try encoder.encode(options)
+
+        if let cursorType = options?.cursorType {
+            let encodedType = try encoder.encode(cursorType)
+            if optionsDoc == nil { optionsDoc = Document() }
+            try optionsDoc!.merge(encodedType)
+        }
+
+        if let hint = options?.hint {
+            let encodedHint = try encoder.encode(hint)
+            if optionsDoc == nil { optionsDoc = Document() }
+            try optionsDoc!.merge(encodedHint)
+        }
+
+        let opts = try ReadConcern.append(options?.readConcern, to: optionsDoc, callerRC: self.readConcern)
+
         guard let cursor = mongoc_collection_find_with_opts(self._collection, filter.data, opts?.data, nil) else {
             throw MongoError.invalidResponse()
         }
