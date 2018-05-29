@@ -22,16 +22,6 @@ public struct IndexHint: Encodable {
         case hint
     }
 
-    // internal func encode(to doc: Document?) -> Document {
-    //     toReturn = doc ?? Document()
-    //     if self.stringValue != nil {
-    //         toReturn["hint"] = self.stringValue
-    //     } else {
-    //         toReturn["hint"] = self.docValue
-    //     }
-    //     return toReturn
-    // }
-
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         if let str = self.stringValue {
@@ -39,6 +29,14 @@ public struct IndexHint: Encodable {
         } else {
             try container.encode(docValue, forKey: .hint)
         }
+    }
+
+    internal static func append(_ hint: IndexHint?, to opts: Document?) throws -> Document {
+        var options = opts ?? Document()
+        guard let hint = hint else { return options }
+        let encodedHint = try BsonEncoder().encode(hint)
+        try options.merge(encodedHint)
+        return options
     }
 }
 
@@ -191,6 +189,14 @@ public enum CursorType: Encodable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self == .tailable || self == .tailableAwait, forKey: .tailable)
         try container.encode(self == .tailableAwait, forKey: .awaitData)
+    }
+
+    internal static func append(_ type: CursorType?, to opts: Document?) throws -> Document {
+        var options = opts ?? Document()
+        guard let type = type else { return options }
+        let encodedType = try BsonEncoder().encode(type)
+        try options.merge(encodedType)
+        return options
     }
 
 }
@@ -637,26 +643,11 @@ public class MongoCollection<T: Codable> {
      * - Returns: A `MongoCursor` over the resulting `Document`s
      */
     public func find(_ filter: Document = [:], options: FindOptions? = nil) throws -> MongoCursor<CollectionType> {
-        let encoder = BsonEncoder()
-        var optionsDoc: Document?
+        let optsWithHint = try IndexHint.append(options?.hint, to: try BsonEncoder().encode(options))
+        let optsWithCursorType = try CursorType.append(options?.cursorType, to: optsWithHint)
+        let finalOpts = try ReadConcern.append(options?.readConcern, to: optsWithCursorType, callerRC: self.readConcern)
 
-        optionsDoc = try encoder.encode(options)
-
-        if let cursorType = options?.cursorType {
-            let encodedType = try encoder.encode(cursorType)
-            if optionsDoc == nil { optionsDoc = Document() }
-            try optionsDoc!.merge(encodedType)
-        }
-
-        if let hint = options?.hint {
-            let encodedHint = try encoder.encode(hint)
-            if optionsDoc == nil { optionsDoc = Document() }
-            try optionsDoc!.merge(encodedHint)
-        }
-
-        let opts = try ReadConcern.append(options?.readConcern, to: optionsDoc, callerRC: self.readConcern)
-
-        guard let cursor = mongoc_collection_find_with_opts(self._collection, filter.data, opts?.data, nil) else {
+        guard let cursor = mongoc_collection_find_with_opts(self._collection, filter.data, finalOpts?.data, nil) else {
             throw MongoError.invalidResponse()
         }
         guard let client = self._client else {
@@ -675,11 +666,13 @@ public class MongoCollection<T: Codable> {
      * - Returns: A `MongoCursor` over the resulting `Document`s
      */
     public func aggregate(_ pipeline: [Document], options: AggregateOptions? = nil) throws -> MongoCursor<Document> {
-        let encoder = BsonEncoder()
-        let opts = try ReadConcern.append(options?.readConcern, to: try encoder.encode(options), callerRC: self.readConcern)
         let pipeline: Document = ["pipeline": pipeline]
+
+        let optsWithHint = try IndexHint.append(options?.hint, to: try BsonEncoder().encode(options))
+        let finalOpts = try ReadConcern.append(options?.readConcern, to: optsWithHint, callerRC: self.readConcern)
+
         guard let cursor = mongoc_collection_aggregate(
-            self._collection, MONGOC_QUERY_NONE, pipeline.data, opts?.data, nil) else {
+            self._collection, MONGOC_QUERY_NONE, pipeline.data, finalOpts?.data, nil) else {
             throw MongoError.invalidResponse()
         }
         guard let client = self._client else {
@@ -698,13 +691,14 @@ public class MongoCollection<T: Codable> {
      * - Returns: The count of the documents that matched the filter
      */
     public func count(_ filter: Document = [:], options: CountOptions? = nil) throws -> Int {
-        let encoder = BsonEncoder()
-        let opts = try ReadConcern.append(options?.readConcern, to: try encoder.encode(options), callerRC: self.readConcern)
+        let optsWithHint = try IndexHint.append(options?.hint, to: try BsonEncoder().encode(options))
+        let finalOpts = try ReadConcern.append(options?.readConcern, to: optsWithHint, callerRC: self.readConcern)
+
         var error = bson_error_t()
         // because we already encode skip and limit in the options,
         // pass in 0s so we don't get duplicate parameter errors.
         let count = mongoc_collection_count_with_opts(
-            self._collection, MONGOC_QUERY_NONE, filter.data, 0, 0, opts?.data, nil, &error)
+            self._collection, MONGOC_QUERY_NONE, filter.data, 0, 0, finalOpts?.data, nil, &error)
 
         if count == -1 { throw MongoError.commandError(message: toErrorString(error)) }
 
