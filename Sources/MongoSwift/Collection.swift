@@ -64,10 +64,10 @@ public struct AggregateOptions: Encodable {
     public let comment: String?
 
     /// The index hint to use for the aggregation. The hint does not apply to $lookup and $graphLookup stages.
-    let hint: IndexHint?
+    public let hint: IndexHint?
 
     /// A `ReadConcern` to use for this operation. 
-    let readConcern: ReadConcern?
+    public let readConcern: ReadConcern?
 
     /// Convenience initializer allowing any/all parameters to be optional
     public init(allowDiskUse: Bool? = nil, batchSize: Int32? = nil, bypassDocumentValidation: Bool? = nil,
@@ -96,7 +96,7 @@ public struct CountOptions: Encodable {
     public let collation: Document?
 
     /// A hint for the index to use.
-    let hint: IndexHint?
+    public let hint: IndexHint?
 
     /// The maximum number of documents to count.
     public let limit: Int64?
@@ -108,7 +108,7 @@ public struct CountOptions: Encodable {
     public let skip: Int64?
 
     /// A ReadConcern to use for this operation. 
-    let readConcern: ReadConcern?
+    public let readConcern: ReadConcern?
 
     /// Convenience initializer allowing any/all parameters to be optional
     public init(collation: Document? = nil, hint: IndexHint? = nil, limit: Int64? = nil, maxTimeMS: Int64? = nil,
@@ -136,7 +136,7 @@ public struct DistinctOptions: Encodable {
     public let maxTimeMS: Int64?
 
     /// A ReadConcern to use for this operation. 
-    let readConcern: ReadConcern?
+    public let readConcern: ReadConcern?
 
     /// Convenience initializer allowing any/all parameters to be optional
     public init(collation: Document? = nil, maxTimeMS: Int64? = nil, readConcern: ReadConcern? = nil) {
@@ -152,7 +152,7 @@ public struct DistinctOptions: Encodable {
 }
 
 /// The possible types of `MongoCursor` an operation can return.
-public enum CursorType: Encodable {
+public enum CursorType {
     /**
      * The default value. A vast majority of cursors will be of this type.
      */
@@ -180,25 +180,6 @@ public enum CursorType: Encodable {
      * - SeeAlso: https://docs.mongodb.com/meta-driver/latest/legacy/mongodb-wire-protocol/#op-query
      */
     case tailableAwait
-
-    private enum CodingKeys: String, CodingKey {
-        case tailable, awaitData
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self == .tailable || self == .tailableAwait, forKey: .tailable)
-        try container.encode(self == .tailableAwait, forKey: .awaitData)
-    }
-
-    internal static func append(_ type: CursorType?, to opts: Document?) throws -> Document {
-        var options = opts ?? Document()
-        guard let type = type else { return options }
-        let encodedType = try BsonEncoder().encode(type)
-        try options.merge(encodedType)
-        return options
-    }
-
 }
 
 /// Options to use when executing a `find` command on a `MongoCollection`.
@@ -218,8 +199,14 @@ public struct FindOptions: Encodable {
     /// Indicates the type of cursor to use. This value includes both the tailable and awaitData options.
     public let cursorType: CursorType?
 
+    /// If a `CursorType` is provided, indicates whether it is .tailable or .tailableAwait.
+    private let tailable: Bool?
+
+    /// If a `CursorType` is provided, indicates whether it is .tailableAwait.
+    private let awaitData: Bool?
+
     /// A hint for the index to use.
-    let hint: IndexHint?
+    public let hint: IndexHint?
 
     /// The maximum number of documents to return.
     public let limit: Int64?
@@ -275,6 +262,8 @@ public struct FindOptions: Encodable {
         self.collation = collation
         self.comment = comment
         self.cursorType = cursorType
+        self.tailable = cursorType == .tailable || cursorType == .tailableAwait
+        self.awaitData = cursorType == .tailableAwait
         self.hint = hint
         self.limit = limit
         self.max = max
@@ -294,7 +283,8 @@ public struct FindOptions: Encodable {
     // Encode everything except readConcern and hint
     private enum CodingKeys: String, CodingKey {
         case allowPartialResults, batchSize, collation, comment, limit, max, maxAwaitTimeMS,
-            maxScan, maxTimeMS, min, noCursorTimeout, projection, returnKey, showRecordId, skip, sort
+            maxScan, maxTimeMS, min, noCursorTimeout, projection, returnKey, showRecordId, skip, sort,
+            tailable, awaitData
     }
 }
 
@@ -644,8 +634,7 @@ public class MongoCollection<T: Codable> {
      */
     public func find(_ filter: Document = [:], options: FindOptions? = nil) throws -> MongoCursor<CollectionType> {
         let optsWithHint = try IndexHint.append(options?.hint, to: try BsonEncoder().encode(options))
-        let optsWithCursorType = try CursorType.append(options?.cursorType, to: optsWithHint)
-        let finalOpts = try ReadConcern.append(options?.readConcern, to: optsWithCursorType, callerRC: self.readConcern)
+        let finalOpts = try ReadConcern.append(options?.readConcern, to: optsWithHint, callerRC: self.readConcern)
 
         guard let cursor = mongoc_collection_find_with_opts(self._collection, filter.data, finalOpts?.data, nil) else {
             throw MongoError.invalidResponse()
